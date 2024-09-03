@@ -1,0 +1,323 @@
+---
+title: ""
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, dpi = 600, fig.width = 8)
+
+library(dplyr)
+library(DT)
+library(ggplot2)
+library(googlesheets4)
+library(knitr)
+library(leaflet)
+library(plotly)
+library(purrr)
+library(summaryplots)
+library(tidyr)
+library(waves)
+
+theme_set(theme_light())
+
+dt_options <- list(
+  dom = 'ft',
+  paging = FALSE,
+  searching = TRUE,
+  scrollY = "500px",
+  scrollX = "500px",
+  columnDefs = list(list(className = 'dt-center', targets = "_all"))
+)
+
+# read in all wave data
+files <- list.files(
+  "R:/data_branches/wave/processed_data/deployment_data",
+  pattern = "rds",
+  full.names = TRUE,
+  recursive = TRUE
+)
+
+dat_raw <- files %>% 
+  purrr::map_dfr(readRDS) 
+  
+dat <- dat_raw %>% 
+  wv_assign_short_variable_names() %>% 
+  wv_pivot_vars_longer(first_pivot_col = 6, last_pivot_col = 17) %>% 
+  wv_pivot_flags_longer() %>% 
+  filter(grossrange_flag_value == 1)
+
+rm(dat_raw)
+
+st_locations <- read_sheet(
+  "https://docs.google.com/spreadsheets/d/1DVfJbraoWL-BW8-Aiypz8GZh1sDS6-HtYCSrnOSW07U/edit?gid=1923344665#gid=1923344665",
+  sheet = "Area Info",
+  col_types = "cccnnc", na = c("", "NA")
+) %>% 
+  inner_join(distinct(dat, county, station), by = join_by(station, county))
+
+
+county_pal <- get_county_colour_palette(length(unique(dat$county)))
+
+theme_facet_plotly <- theme(panel.spacing.y = unit(25, "lines"))
+```
+
+# Wave Parameter Exploratory Analysis
+
+August 27, 2024
+
+- Preliminary QC applied (obvious outliers removed through grossrange test).
+
+# Station Locations
+
+Approximate location of stations with wave data.
+
+```{r}
+#| fig-height: 7
+
+county_map_pal <- colorFactor(
+  palette = county_pal,
+  domain = unique(st_locations$county),
+  na.color = "transparent"
+)
+
+# interactive map
+leaflet(st_locations) %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addCircleMarkers(
+    data = st_locations,
+    lng = ~longitude, lat = ~latitude, label = ~station,
+    weight = 1,
+    color = "black",
+    fillOpacity = 0.75,
+    fillColor = ~county_map_pal(county),
+    radius = 5
+  ) %>% 
+  addScaleBar(
+    position = "bottomleft", 
+    options = scaleBarOptions(imperial = FALSE)
+  )
+
+```
+
+```{r}
+#| message: false
+
+n_obs <- dat %>% 
+  filter(variable %in% c("significant_height_m", "peak_period_s")) %>% 
+  group_by(county, variable) %>% 
+  summarise(n = n()) %>%
+  ungroup() %>% 
+  distinct(county, n) %>% 
+  mutate(n_percent = round(n * 100 / sum(n), digits = 1))
+
+county_stats <- dat %>% 
+  filter(variable %in% c("significant_height_m", "peak_period_s")) %>% 
+  group_by(county, variable) %>% 
+  summarise(
+    n = n(),
+    mean = round(mean(value), digits = 2),
+    min = min(value),
+    max = max(value),
+    stdev = round(sd(value), digits = 2), 
+    q_95 = round(quantile(value, probs = 0.95), digits = 2),
+    q_997 = round(quantile(value, probs = 0.997), digits = 2)
+  ) %>%
+  ungroup() %>% 
+  left_join(n_obs, by = join_by(county, n)) %>% 
+  select(county, variable, n, n_percent, everything())
+  
+```
+
+## Number of Observations
+
+### Figure 1
+```{r}
+#| fig-height: 8
+#| fig-cap: The number of paired significant wave height and peak period observations in each county. 
+#| fig-cap-location: top
+
+p <- n_obs %>% 
+  mutate(units = "NA") %>% 
+  plot_n_obs_county()
+
+ggplotly(p)
+```
+
+# Significant Wave Height
+
+```{r}
+height <- dat %>% 
+  filter(variable == "significant_height_m")
+```
+
+## Distribution
+
+::: panel-tabset
+### Figure 2
+```{r}
+#| fig-height: 6
+#| fig-cap: The distribution of significant wave height.
+#| warning: false
+
+p <- height %>% 
+  plot_histogram(hist_col = "value", binwidth = 0.1) +
+  scale_x_continuous("significant_wave_height_m")
+
+ggplotly(p)
+```
+
+### Figure 3
+```{r}
+#| fig-height: 8
+#| fig-cap: The distribution of significant wave height in each county.
+
+p <- p +
+  facet_wrap(~county, ncol = 3) +
+  theme_facet_plotly
+
+ggplotly(p)
+```
+:::
+
+## Statistics
+::: panel-tabset
+
+### Figure 4
+```{r}
+#| fig-height: 8
+#| fig-cap: The mean and standard deviation of wave height in each county.
+
+p <- county_stats %>% 
+  filter(variable == "significant_height_m") %>% 
+  plot_mean_sd_county()
+
+ggplotly(p, tooltip = "text")
+```
+
+### Table 1
+
+```{r}
+county_stats %>% 
+  filter(variable == "significant_height_m") %>% 
+  select(-variable) %>% 
+  datatable(rownames = FALSE, options = dt_options)
+```
+
+:::
+
+# Peak Period
+
+```{r}
+period <- dat %>% 
+  filter(variable == "peak_period_s")
+```
+
+## Distribution
+
+::: panel-tabset
+### Figure 5
+```{r}
+#| fig-height: 6
+#| fig-cap: The distribution of peak period.
+#| warning: false
+
+p <- period %>% 
+  plot_histogram(hist_col = "value", binwidth = 2) +
+  scale_x_continuous("peak_period_s")
+
+ggplotly(p)
+```
+
+### Figure 6
+```{r}
+#| fig-height: 8
+#| fig-cap: The distribution of significant wave height in each county.
+
+p <- p +
+  facet_wrap(~county, ncol = 3) +
+  theme_facet_plotly
+
+ggplotly(p)
+```
+
+### Figure 7
+```{r}
+#| fig-height: 8
+#| fig-cap: Violin plot of peak period in each county.
+
+p <- period %>% 
+  ggplot(aes(value, county, fill = county)) +
+  geom_violin() +
+  scale_x_continuous("peak_period_s") +
+  scale_y_discrete("", limits = rev) +
+  scale_fill_manual(values = county_pal, guide = "none") +
+  theme(text = element_text(size = 14))
+  
+p
+```
+:::
+
+## Statistics
+::: panel-tabset
+
+### Figure 8
+```{r}
+#| fig-height: 8
+#| fig-cap: The mean and standard deviation of peak period in each county.
+
+p <- county_stats %>% 
+  filter(variable == "peak_period_s") %>% 
+  plot_mean_sd_county()
+
+ggplotly(p, tooltip = "text")
+```
+
+### Table 2
+
+```{r}
+county_stats %>% 
+  filter(variable == "peak_period_s") %>% 
+  select(-variable) %>% 
+  datatable(rownames = FALSE, options = dt_options)
+```
+
+:::
+
+# Correlation
+
+::: panel-tabset
+### Figure 9
+```{r}
+#| fig-height: 6
+#| fig-cap: Significant wave height vs. peak period.
+
+dat_wide <- dat %>% 
+  filter(variable %in% c("significant_height_m", "peak_period_s")) %>% 
+  pivot_wider(values_from = "value", names_from = "variable")
+
+p <- ggplot(dat_wide, 
+       aes(peak_period_s, significant_height_m, color = county)) +
+  geom_point() +
+   scale_color_manual(values = county_pal, guide = "none")
+
+ggplotly(p)
+
+```
+
+### Figure 10
+```{r}
+#| fig-height: 10
+#| fig-cap: Significant wave height vs. peak period by county. (Same information as the violin plots.)
+p <- p +
+  facet_wrap(~county, ncol = 3) +
+  theme_facet_plotly
+
+ggplotly(p)
+```
+:::

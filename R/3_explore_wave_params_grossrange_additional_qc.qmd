@@ -1,0 +1,402 @@
+---
+title: ""
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, dpi = 600, fig.width = 8)
+
+library(dplyr)
+library(DT)
+library(ggplot2)
+library(googlesheets4)
+library(here)
+library(htmltools)
+library(knitr)
+library(leaflet)
+library(plotly)
+library(purrr)
+library(stringr)
+library(summaryplots)
+library(tidyr)
+library(waves)
+
+source(here("functions/helpers.R"))
+source(here("functions/subchunkify.R"))
+
+theme_set(theme_light())
+
+dt_options <- list(
+  dom = 'ft',
+  paging = FALSE,
+  searching = TRUE,
+  scrollY = "500px",
+  scrollX = "500px",
+  columnDefs = list(list(className = 'dt-center', targets = "_all"))
+)
+
+# read in all wave data
+dat <- readRDS(here("data/2024-08-28_wave_data_prelim_qc.rds")) %>% 
+  filter(
+    !(variable == "average_height_largest_33_percent_m" & value > 15),
+    !(variable == "period_largest_10_percent_s" & value > 60),
+    !(variable == "period_largest_33_percent_s" & value > 60),
+    !(variable == "period_maximum_s" & value > 60)
+  )
+
+stats <- dat %>% 
+  group_by(county, variable) %>% 
+  summarise(
+    n = n(),
+    mean = round(mean(value), digits = 2),
+    min = min(value),
+    max = max(value),
+    stdev = round(sd(value), digits = 2), 
+    mean_3sd = mean + 3 * stdev,
+    q_90 = round(quantile(value, probs = 0.90), digits = 2),
+    q_95 = round(quantile(value, probs = 0.95), digits = 2),
+    q_997 = round(quantile(value, probs = 0.997), digits = 2)
+  ) %>%
+  ungroup() %>% 
+  mutate(n_percent = round(n * 100 / sum(n), digits = 1)) %>% 
+  select(county, variable, n, n_percent, everything())
+
+
+gs4_deauth()
+st_locations <- read_sheet(
+  "https://docs.google.com/spreadsheets/d/1DVfJbraoWL-BW8-Aiypz8GZh1sDS6-HtYCSrnOSW07U/edit?gid=1923344665#gid=1923344665",
+  sheet = "Area Info",
+  col_types = "cccnnc", na = c("", "NA")
+) %>% 
+  inner_join(distinct(dat, county, station), by = join_by(station, county))
+
+
+county_pal <- get_county_colour_palette(length(unique(dat$county)))
+
+theme_facet_plotly <- theme(panel.spacing.y = unit(1, "lines"))
+
+vars <- unique(dat$variable)
+
+```
+
+# Wave Parameters: Explore grossrange thresholds
+
+August 27, 2024
+
+- Preliminary QC applied (0 values and obvious outliers removed through grossrange test).
+- Additional QC applied after additional review of the data
+  - Wave heights > 20 m
+  - Periods > 100 s
+
+# Station Locations
+
+Approximate location of stations with wave data.
+
+```{r}
+#| fig-height: 6
+
+county_map_pal <- colorFactor(
+  palette = county_pal,
+  domain = unique(st_locations$county),
+  na.color = "transparent"
+)
+
+# interactive map
+leaflet(st_locations) %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addCircleMarkers(
+    data = st_locations,
+    lng = ~longitude, lat = ~latitude, label = ~station,
+    weight = 1,
+    color = "black",
+    fillOpacity = 0.75,
+    fillColor = ~county_map_pal(county),
+    radius = 5
+  ) %>% 
+  addScaleBar(
+    position = "bottomleft", 
+    options = scaleBarOptions(imperial = FALSE)
+  )
+
+```
+
+```{r}
+#| message: false
+#| results: asis
+
+# var_i <- vars[i]
+# 
+# dat_i <- dat %>% 
+#   filter(variable == var_i)
+# 
+# stats_i <- stats %>% 
+#   filter(variable == var_i)
+  
+```
+
+# Number of Observations
+
+::: panel-tabset
+```{r}
+#| warning: false
+#| message: false
+#| results: asis
+#| fig-height: 7
+
+plot_ly()
+
+for(i in seq_along(vars)) {
+
+  var_i <- vars[i]
+
+  stats_i <- stats %>%
+    filter(variable == var_i)
+
+  cat(paste("### ", var_i, "\n \n"))
+
+  p_i <- stats_i %>%
+    mutate(units = "NA") %>%
+    plot_n_obs_county()
+
+  print(htmltools::tagList(ggplotly(p_i, tooltip = "text")))
+
+  cat("\n\n")
+}
+
+```
+:::
+
+# Distribution
+
+::: panel-tabset
+
+```{r}
+#| warning: false
+#| message: false
+#| results: asis
+#| fig-height: 6
+
+plot_ly()
+
+for(i in seq_along(vars)) {
+
+  var_i <- vars[i]
+
+  dat_i <- dat %>%
+    filter(variable == var_i)
+  
+  bin_width <- get_bin_width(var_i)
+
+  cat(paste("### ", var_i, "\n \n"))
+
+  p_i <- dat_i %>%
+    plot_histogram(hist_col = "value", binwidth = bin_width) +
+    scale_x_continuous(var_i)
+
+  print(htmltools::tagList(ggplotly(p_i, tooltip = "text")))
+
+  cat("\n\n")
+}
+```
+:::
+
+# Distribution by County
+
+::: panel-tabset
+
+```{r}
+#| warning: false
+#| message: false
+#| results: asis
+
+for(i in seq_along(vars)) {
+
+  var_i <- vars[i]
+
+  dat_i <- dat %>%
+    filter(variable == var_i)
+  
+  bin_width <- get_bin_width(var_i)
+ 
+  cat(paste("### ", var_i, "\n \n"))
+
+  p_i <- dat_i %>%
+    plot_histogram(hist_col = "value", binwidth = bin_width) +
+    scale_x_continuous(var_i) +
+    facet_wrap(~county, ncol = 3)
+
+  subchunkify(p_i, fig_height = 8, fig_width = 8.5)
+
+  cat("\n\n")
+}
+
+# plot_ly()
+# 
+# for(i in seq_along(vars)) {
+# 
+#   var_i <- vars[i]
+# 
+#   dat_i <- dat %>%
+#     filter(variable == var_i)
+# 
+#   bin_width <- get_bin_width(var_i)
+# 
+#   cat(paste("### ", var_i, "\n \n"))
+# 
+#   p_i <- dat_i %>%
+#     plot_histogram(hist_col = "value", binwidth = bin_width) +
+#     scale_x_continuous(var_i) +
+#     facet_wrap(~county, ncol = 3) +
+#     theme_facet_plotly
+# 
+#   print(
+#     htmltools::tagList(ggplotly(p_i, tooltip = "text", height = h_interactive()))
+#   )
+# 
+#   cat("\n\n")
+# }
+```
+:::
+
+# Distribution as Violin Plot
+
+::: panel-tabset
+
+```{r}
+#| warning: false
+#| message: false
+#| results: "asis"
+#| fig-height: 6
+
+for(i in seq_along(vars)) {
+
+  var_i <- vars[i]
+
+  dat_i <- dat %>%
+    filter(variable == var_i)
+
+  cat(paste("### ", var_i, "\n \n"))
+
+  p_i <- dat_i %>%
+    ggplot(aes(value, county, fill = county)) +
+    geom_violin() +
+    scale_x_continuous(var_i) +
+    scale_y_discrete("", limits = rev) +
+    scale_fill_manual(values = county_pal, guide = "none") +
+    theme(text = element_text(size = 14))
+
+  subchunkify(p_i, fig_height = 7, fig_width = 8.5)
+
+  cat("\n\n")
+}
+```
+:::
+
+# Mean and Standard Deviation
+
+::: panel-tabset
+
+```{r}
+#| warning: false
+#| message: false
+#| results: asis
+#| fig-height: 8
+
+plot_ly()
+
+for(i in seq_along(vars)) {
+
+  var_i <- vars[i]
+
+  stats_i <- stats %>%
+    filter(variable == var_i)
+
+  cat(paste("### ", var_i, "\n \n"))
+
+  p_i <- stats_i %>%
+    mutate(variable = var_i) %>%
+    plot_mean_sd_county()
+
+  print(
+    htmltools::tagList(
+      ggplotly(p_i, tooltip = "text")
+      )
+    )
+
+  cat("\n\n")
+}
+```
+:::
+
+# Quantiles
+
+::: panel-tabset
+```{r}
+#| warning: false
+#| message: false
+#| results: asis
+#| fig-height: 8
+
+plot_ly()
+
+for(i in seq_along(vars)) {
+  
+  var_i <- vars[i]
+  
+  stats_i <- stats %>%
+    filter(variable == var_i) %>% 
+    select(county, contains("q")) %>% 
+    pivot_longer(cols = contains("q"), names_to = "quantile")
+  
+  cat(paste("### ", var_i, "\n \n"))
+  
+  p_i <- ggplot(stats_i, aes(quantile, value, group = county, col = county)) +
+    geom_point() +
+    geom_line() +
+    scale_color_manual(values = county_pal, drop = FALSE) +
+    scale_y_continuous(var_i)
+  
+  print(htmltools::tagList(ggplotly(p_i)))
+  
+  cat("\n\n")
+}
+
+```
+:::
+
+# Table 1
+
+```{r}
+stats %>% 
+  datatable(rownames = FALSE, options = dt_options)
+```
+
+# Table 2
+
+```{r}
+dat %>% 
+  group_by(variable) %>% 
+  summarise(
+    n = n(),
+    mean = round(mean(value), digits = 2),
+    min = min(value),
+    max = max(value),
+    stdev = round(sd(value), digits = 2), 
+    mean_3sd = mean + 3 * stdev,
+    q_90 = round(quantile(value, probs = 0.90), digits = 2),
+    q_95 = round(quantile(value, probs = 0.95), digits = 2),
+    q_997 = round(quantile(value, probs = 0.997), digits = 2)
+  ) %>%
+  ungroup() %>% 
+  mutate(n_percent = round(n * 100 / sum(n), digits = 1)) %>% 
+  select(variable, n, n_percent, everything()) %>% 
+  datatable(rownames = FALSE, options = dt_options)
+
+```
+

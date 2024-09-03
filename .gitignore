@@ -1,0 +1,9 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+*.xlsx
+.Rdata
+.httr-oauth
+.DS_Store
