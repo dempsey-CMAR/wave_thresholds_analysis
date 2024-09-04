@@ -1,0 +1,109 @@
+---
+title: ""
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, dpi = 600, fig.width = 8)
+
+library(dplyr)
+library(DT)
+library(ggplot2)
+library(here)
+library(htmltools)
+library(knitr)
+library(plotly)
+library(purrr)
+library(stringr)
+library(summaryplots)
+library(tidyr)
+library(waves)
+
+source(here("functions/helpers.R"))
+source(here("functions/subchunkify.R"))
+
+theme_set(theme_light())
+
+dt_options <- list(
+  dom = 'ft',
+  paging = FALSE,
+  searching = TRUE,
+  scrollY = "500px",
+  scrollX = "500px",
+  columnDefs = list(list(className = 'dt-center', targets = "_all"))
+)
+
+# read in all wave data
+dat_raw <- readRDS(here("data/2024-08-28_wave_data_no_qc.rds"))
+
+county_pal <- get_county_colour_palette(length(unique(dat_raw$county)))
+
+theme_facet_plotly <- theme(
+  panel.spacing.y = unit(1, "lines"),
+  panel.spacing.x = unit(4, "lines")
+)
+```
+
+# Wave Parameters: Explore height and period
+
+September 4, 2024
+
+- Preliminary analysis suggests that 0 and -0.1 are used to indicate "bad" period measurements.
+- Wave height values of 0 m are not automatically considered suspect, but if they correspond to a period of 0 or -0.1 s, then they should be suspect or fail.
+
+
+
+```{r}
+#| message: false
+#| warning: false
+#| results: asis
+
+dat <- dat_raw %>% 
+  pivot_wider(names_from = "variable", values_from = "value")
+
+vars <- unique(dat_raw$variable)
+vars <- vars[which(str_detect(vars, "height|period"))]
+
+plot_ly()
+
+for(i in seq_along(vars)) {
+  
+  var_i <- vars[i]
+  #other_vars <- vars[-which(vars == var_i)]
+  
+  cat(paste("## ", var_i, "\n \n"))
+  
+  dat_i <- dat %>% 
+    filter_var(vars[i]) %>% 
+    wv_convert_vars_to_ordered_factor()
+  
+  p_i <- plot_histogram(
+    dat_i, hist_col = value, fill_col = county, pal = county_pal
+    ) +
+    facet_wrap(~variable, scales = "free", ncol = 2) +
+    theme_facet_plotly
+  
+  print(
+    htmltools::tagList(ggplotly(p_i, tooltip = "text", height = 1400))
+  )
+  
+  #ggplotly(p)
+  
+  #subchunkify(p, fig_height = 10, fig_width = 8.5)
+}
+
+```
+
+- There is only one peak period observation of 0 s (North Aberdeen).
+- "Bad" height and period observations correspond with bad direction observation (recorded as 0).
+- When zero-crossing height parameters are 0, significant height is NOT.
+- When significant height is 0, zero-crossing height parameters are also 0.
+
+
+
