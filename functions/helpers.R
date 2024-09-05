@@ -16,3 +16,13 @@ get_bin_width <- function(var_to_bin) {
 
   bin_width
 }
+
+# filter entire row based on one variable
+filter_var <- function(dat_wide, var_i) {
+
+  dat_wide %>%
+    rename(var_to_filter = {{ var_i }}) %>%
+    filter(var_to_filter <= 0)  %>%
+    rename("{var_i}" := var_to_filter) %>%
+    wv_pivot_vars_longer(first_pivot_col = 6)
+}
