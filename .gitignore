@@ -3,7 +3,7 @@
 .RData
 .Ruserdata
 
-*.xlsx
+*.html
 .Rdata
 .httr-oauth
 .DS_Store
