@@ -20,6 +20,14 @@ library(readr)
 library(sensorstrings)
 library(tidyr)
 
+zero_crossing <- c(
+  "average_height_largest_33_percent_m",
+  "average_height_largest_10_percent_m",
+  "period_largest_33_percent_s",
+  "period_largest_10_percent_s",
+  "maximim_height_m",
+  "period_maximum_s"
+)
 
 dat <- readRDS(here("data/2024-08-28_wave_data_prelim_qc.rds")) %>%
   filter(
@@ -27,6 +35,15 @@ dat <- readRDS(here("data/2024-08-28_wave_data_prelim_qc.rds")) %>%
     !(variable == "period_largest_10_percent_s" & value > 60),
     !(variable == "period_largest_33_percent_s" & value > 60),
     !(variable == "period_maximum_s" & value > 60)
+  ) %>%
+  filter(
+    !(variable == "average_height_largest_33_percent_m" & value > 15),
+    !(variable == "period_largest_10_percent_s" & value > 60),
+    !(variable == "period_largest_33_percent_s" & value > 60),
+    !(variable == "period_maximum_s" & value > 60),
+    !(variable %in% zero_crossing & deployment_id == "IV001"),
+    !(variable %in% zero_crossing & deployment_id == "QN010"),
+    deployment_id != "PC001"
   )
 
 # Grossrange sensor thresholds --------------------------------------------
@@ -51,7 +68,10 @@ grossrange_county_quartile <- dat %>%
       "sea_water_speed_m_s")
   ) %>%
   group_by(county, variable) %>%
-  summarise(user_max = round(quantile(value, probs = 0.997), digits = 2)) %>%
+  summarise(
+    user_max = round(
+      quantile(value, probs = 0.997, na.rm = TRUE), digits = 2)
+  ) %>%
   ungroup() %>%
   mutate(
     qc_test = "grossrange",
@@ -61,12 +81,10 @@ grossrange_county_quartile <- dat %>%
     ) %>%
   select(qc_test, variable, user_min, everything()) %>%
   pivot_longer(
-    cols = contains("user"),
+    cols = c(contains("gr"), contains("user")),
     values_to = "threshold_value", names_to = "threshold"
   ) %>%
   mutate(threshold_value = round(threshold_value, digits = 3))
-
-
 
 
 grossrange_pooled_quartile <- dat %>%
@@ -89,7 +107,7 @@ grossrange_pooled_quartile <- dat %>%
   ) %>%
   select(qc_test, variable, user_min, everything()) %>%
   pivot_longer(
-    cols = contains("user"),
+    cols = c(contains("gr"), contains("user")),
     values_to = "threshold_value", names_to = "threshold"
   ) %>%
   mutate(threshold_value = round(threshold_value, digits = 3))
@@ -113,6 +131,7 @@ grossrange <- bind_rows(
   grossrange_county_quartile, grossrange_pooled_quartile, grossrange_other
 )
 
+attr(grossrange$threshold_value, "names") <- NULL
 
 
 # Export ------------------------------------------------------------------
@@ -123,10 +142,11 @@ wv_thresholds <- bind_rows(
   select(qc_test, variable, county, threshold, threshold_value)
 
 
-#fwrite(thresholds, file = here("output/thresholds.csv"), na = "NA")
+fwrite(wv_thresholds, file = here("output/wv_thresholds.csv"), na = "NA")
 
 # export directly to waves
 save(
   wv_thresholds,
-  file = "C:/Users/Danielle Dempsey/Desktop/RProjects/Packages/waves/data/wv_thresholds.rda")
+  file = "C:/Users/Danielle Dempsey/Desktop/RProjects/Packages/waves/data/wv_thresholds.rda"
+)
 

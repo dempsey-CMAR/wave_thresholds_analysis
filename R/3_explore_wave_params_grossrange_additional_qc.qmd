@@ -41,13 +41,25 @@ dt_options <- list(
   columnDefs = list(list(className = 'dt-center', targets = "_all"))
 )
 
+zero_crossing <- c(
+  "average_height_largest_33_percent_m",
+  "average_height_largest_10_percent_m",
+  "period_largest_33_percent_s",
+  "period_largest_10_percent_s",
+  "maximim_height_m",
+  "period_maximum_s"
+)
+
 # read in all wave data
 dat <- readRDS(here("data/2024-08-28_wave_data_prelim_qc.rds")) %>% 
   filter(
     !(variable == "average_height_largest_33_percent_m" & value > 15),
     !(variable == "period_largest_10_percent_s" & value > 60),
     !(variable == "period_largest_33_percent_s" & value > 60),
-    !(variable == "period_maximum_s" & value > 60)
+    !(variable == "period_maximum_s" & value > 60),
+    !(variable %in% zero_crossing & deployment_id == "IV001"),
+    !(variable %in% zero_crossing & deployment_id == "QN010"),
+    deployment_id != "PC001"
   )
 
 stats <- dat %>% 
@@ -61,7 +73,8 @@ stats <- dat %>%
     mean_3sd = mean + 3 * stdev,
     q_90 = round(quantile(value, probs = 0.90), digits = 2),
     q_95 = round(quantile(value, probs = 0.95), digits = 2),
-    q_997 = round(quantile(value, probs = 0.997), digits = 2)
+    q_997 = round(quantile(value, probs = 0.997), digits = 2),
+    q_999 = round(quantile(value, probs = 0.999), digits = 2)
   ) %>%
   ungroup() %>% 
   mutate(n_percent = round(n * 100 / sum(n), digits = 1)) %>% 
@@ -93,6 +106,8 @@ August 27, 2024
 - Additional QC applied after additional review of the data
   - Wave heights > 20 m
   - Periods > 100 s
+- Removed zero-crossing variables from IV001.
+- Removed all of PC001.
 
 # Station Locations
 
@@ -124,20 +139,6 @@ leaflet(st_locations) %>%
     options = scaleBarOptions(imperial = FALSE)
   )
 
-```
-
-```{r}
-#| message: false
-#| results: asis
-
-# var_i <- vars[i]
-# 
-# dat_i <- dat %>% 
-#   filter(variable == var_i)
-# 
-# stats_i <- stats %>% 
-#   filter(variable == var_i)
-  
 ```
 
 # Number of Observations
