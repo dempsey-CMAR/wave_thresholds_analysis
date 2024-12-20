@@ -24,5 +24,5 @@ filter_var <- function(dat_wide, var_i) {
     rename(var_to_filter = {{ var_i }}) %>%
     filter(var_to_filter <= 0)  %>%
     rename("{var_i}" := var_to_filter) %>%
-    wv_pivot_vars_longer(first_pivot_col = 6)
+    wv_pivot_vars_longer()
 }
