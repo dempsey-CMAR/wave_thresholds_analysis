@@ -26,6 +26,7 @@ library(here)
 library(purrr)
 library(tidyr)
 library(waves)
+library(zoo)
 
 
 # read in data ------------------------------------------------------------
@@ -39,7 +40,7 @@ dat_raw <- files %>%
 
 dat1 <- dat_raw %>%
   wv_assign_short_variable_names() %>%
-  wv_pivot_vars_longer(first_pivot_col = 6, last_pivot_col = 17) %>%
+  wv_pivot_vars_longer() %>%
   select(-contains("flag"))
 
 saveRDS(dat1, here("data/2024-08-28_wave_data_no_qc.rds"))
@@ -49,14 +50,14 @@ saveRDS(dat1, here("data/2024-08-28_wave_data_no_qc.rds"))
 
 dat_qc <- dat_raw %>%
   wv_assign_short_variable_names() %>%
-  wv_pivot_vars_longer(first_pivot_col = 6, last_pivot_col = 17) %>%
+  wv_pivot_vars_longer() %>%
   # add placeholder flag values so vars aren't dropped when pivoted
   mutate(
     grossrange_flag_sensor_depth_below_surface_m = ordered(1, levels = c(1:4)),
     grossrange_flag_sea_water_speed_m_s = ordered(1, levels = c(1:4)),
     grossrange_flag_sea_water_to_direction_degree = ordered(1, levels = c(1:4))
   ) %>%
-  wv_pivot_flags_longer() %>%
+  wv_pivot_flags_longer(qc_tests = "grossrange") %>%
   filter(
     grossrange_flag_value == 1,
     depth_trim_flag == 1
@@ -64,10 +65,4 @@ dat_qc <- dat_raw %>%
   select(-c(grossrange_flag_value, depth_trim_flag))
 
 saveRDS(dat_qc, here("data/2024-08-28_wave_data_prelim_qc.rds"))
-
-
-# rolling sd --------------------------------------------------------------
-
-
-
 
