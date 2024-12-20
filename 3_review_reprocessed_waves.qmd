@@ -1,0 +1,110 @@
+---
+format: 
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+editor_options: 
+  chunk_output_type: console
+params:
+  depl_file: depl_file
+---
+
+```{r, set-up, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, dpi = 600, fig.width = 8)
+
+library(data.table)
+library(dplyr)
+library(DT)
+library(knitr)
+library(ggplot2)
+library(googlesheets4)
+library(here)
+library(htmltools)
+library(lubridate)
+library(plotly)
+library(RColorBrewer)
+library(stringr)
+library(tidyr)
+library(waves)
+
+source(here("functions/subchunkify.R"))
+
+# Get the current figure size in pixels:
+h_interactive <- function() {
+  with(knitr::opts_current$get(c("fig.height", "dpi", "fig.retina")),
+       fig.height*dpi/fig.retina)
+}
+
+dt_options1 <- list(
+      dom = 'ft',
+      paging = FALSE,
+      searching = TRUE,
+      pageLength = 500,
+      columnDefs = list(list(className = 'dt-center', targets = "_all"))
+)
+
+# extract deployment info from the file name
+dat_raw <- readRDS(here("data/2024-12-19_reprocessed_examples.rds"))
+
+stations <- unique(dat_raw$station)
+```
+
+# Review Waves Processing Techniques
+
+`r Sys.Date()`
+
+```{r include = FALSE}
+htmltools::tagList(plot_ly(x = rnorm(10), type = "histogram"))
+```
+
+```{r}
+#| results: asis
+#| warning: false
+#| fig-height: 1.5
+
+dat <- dat_raw %>% 
+  filter(
+    variable %in% c("significant_height_m", "peak_period_s", "to_direction_degree")
+  )
+
+for(i in seq_along(stations)) {
+  
+  dat_i <- dat %>%  filter(station == stations[i])
+  
+  cat(paste("## ", stations[i], "\n \n"))
+  
+  p_i <- ggplot(dat_i, aes(timestamp_utc, value, col = process)) +
+    geom_line() +
+    scale_x_datetime("Date", date_labels = "%Y-%m-%d") +
+    scale_colour_manual(
+      "process", 
+      values = brewer.pal(length(unique(dat_i$process)), "Dark2")) +
+    theme_light() +
+    theme(
+      axis.title.y = element_blank(),
+      strip.placement = "outside",
+      strip.background = element_rect(colour = NA, fill = NA),
+      strip.text = element_text(colour = "black", size = 10)
+    ) +
+    facet_wrap(
+      ~variable,
+      ncol = 1,
+      scales = "free_y",
+      strip.position = "left"
+    )
+  
+  print(htmltools::tagList(
+    ggplotly(p_i, height = h_interactive()) %>% 
+      config(displayModeBar = FALSE)
+    ))
+
+  cat("\n\n")
+}
+
+
+```
+
+```{r results='asis'}
+#p_out
+```
