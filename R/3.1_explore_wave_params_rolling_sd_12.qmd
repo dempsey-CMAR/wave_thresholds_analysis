@@ -1,0 +1,276 @@
+---
+title: ""
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, dpi = 600, fig.width = 8)
+
+library(dplyr)
+library(DT)
+library(ggplot2)
+library(googlesheets4)
+library(here)
+library(htmltools)
+library(knitr)
+library(leaflet)
+library(plotly)
+library(purrr)
+library(stringr)
+library(summaryplots)
+library(tidyr)
+library(waves)
+library(zoo)
+
+source(here("functions/helpers.R"))
+source(here("functions/subchunkify.R"))
+
+theme_set(theme_light())
+
+dt_options <- list(
+  dom = 'ft',
+  paging = FALSE,
+  searching = TRUE,
+  scrollY = "500px",
+  scrollX = "500px",
+  columnDefs = list(list(className = 'dt-center', targets = "_all"))
+)
+
+zero_crossing <- c(
+  "average_height_largest_33_percent_m",
+  "average_height_largest_10_percent_m",
+  "period_largest_33_percent_s",
+  "period_largest_10_percent_s",
+  "maximum_height_m",
+  "period_maximum_s"
+)
+
+# read in all wave data
+dat <- readRDS(here("data/2024-08-28_wave_data_prelim_qc.rds")) %>% 
+  filter(
+    !(variable == "average_height_largest_33_percent_m" & value > 15),
+    !(variable == "period_largest_10_percent_s" & value > 60),
+    !(variable == "period_largest_33_percent_s" & value > 60),
+    !(variable == "period_maximum_s" & value > 60),
+    !(variable %in% zero_crossing & deployment_id == "IV001"),
+    !(variable %in% zero_crossing & deployment_id == "QN010"),
+    deployment_id != "PC001"
+  )
+
+gs4_deauth()
+st_locations <- read_sheet(
+  "https://docs.google.com/spreadsheets/d/1DVfJbraoWL-BW8-Aiypz8GZh1sDS6-HtYCSrnOSW07U/edit?gid=1923344665#gid=1923344665",
+  sheet = "Area Info",
+  col_types = "cccnnc", na = c("", "NA")
+) %>%
+  inner_join(distinct(dat, county, station), by = join_by(station, county))
+
+
+county_pal <- get_county_colour_palette(length(unique(dat$county)))
+
+theme_facet_plotly <- theme(panel.spacing.y = unit(1, "lines"))
+
+vars <- unique(dat$variable)
+
+period_hours <- 12
+max_interval_hours <- 4
+
+```
+
+# Wave Parameters: Explore rolling standard deviation
+
+`r Sys.Date()`
+
+- Preliminary QC applied (0 values and obvious outliers removed through grossrange test).
+- Additional QC applied after additional review of the data
+  - Wave heights > 20 m
+  - Periods > 100 s
+- Removed zero-crossing variables from IV001.
+- Removed all of PC001.
+
+# Station Locations
+
+Approximate location of stations with wave data.
+
+```{r}
+#| fig-height: 6
+
+county_map_pal <- colorFactor(
+  palette = county_pal,
+  domain = unique(st_locations$county),
+  na.color = "transparent"
+)
+
+# interactive map
+leaflet(st_locations) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addCircleMarkers(
+    data = st_locations,
+    lng = ~longitude, lat = ~latitude, label = ~station,
+    weight = 1,
+    color = "black",
+    fillOpacity = 0.75,
+    fillColor = ~county_map_pal(county),
+    radius = 5
+  ) %>%
+  addScaleBar(
+    position = "bottomleft",
+    options = scaleBarOptions(imperial = FALSE)
+  )
+
+```
+
+# Sample Interval
+
+- Interval (minutes) between consecutive observations.
+- Expect 60 minutes between most samples.
+- Some QC has been applied to the observations, resulting in large gaps between some observations.
+
+```{r}
+dat_int <- dat %>%
+  group_by(county, station, deployment_id, variable) %>%
+  dplyr::arrange(timestamp_utc, .by_group = TRUE) %>%
+  mutate(
+    # sample interval
+    int_sample = difftime(timestamp_utc, lag(timestamp_utc), units = "mins"),
+    int_sample = round(as.numeric(int_sample))
+  ) 
+```
+
+::: panel-tabset
+
+## Figure 1
+```{r}
+#| message: false
+#| warning: false
+#| fig-height: 10
+
+dat_int %>% 
+  na.omit() %>% 
+  wv_convert_vars_to_ordered_factor() %>% 
+  plot_histogram(hist_col = int_sample, binwidth = 500) +
+  facet_wrap(~variable, scales = "free", ncol = 2)
+
+```
+
+## Figure 2
+
+- Filter so `int_sample` < 240 mins
+- Most of the remaining observations have an interval of 60 mins
+```{r}
+#| message: false
+#| warning: false
+#| fig-height: 10
+
+dat_int %>% 
+  filter(int_sample < 240) %>% 
+  na.omit() %>% 
+  wv_convert_vars_to_ordered_factor() %>% 
+  plot_histogram(hist_col = int_sample, binwidth = 10) +
+  facet_wrap(~variable, scales = "free", ncol = 2)
+```
+
+:::
+
+# Number of Samples Per Period
+
+- Filtered to only include samples with time interval < 240 min (4 hours)
+- Expect 12 samples in 12 hours
+- `period_hours` = `r period_hours`
+- `max_interval_hours` = `r max_interval_hours`
+
+```{r}
+
+dat_sample <- dat_int %>%
+  filter(int_sample < 240) %>% # not sure if this matters
+  mutate(
+    # number of samples in  period_hours
+    # 60 mins / hour * 1 sample / int_sample mins * 24 hours / period
+    n_sample = round((60 / int_sample) * period_hours),
+    # n_sample = if_else(is.na(n_sample), 1, n_sample), # first obs
+    n_sample_effective = case_when(
+      # first observation of each group is NA, which will give error in rollapply
+      is.na(n_sample) ~ 0,
+      # if the sample interval is greater than acceptable limit, set n_sample to 0
+      # so that roll_sd will be NA
+      int_sample > max_interval_hours * 60 ~ 0,
+      TRUE ~ n_sample
+    ))
+```
+
+::: panel-tabset
+## Figure 3
+
+- n_sample
+
+```{r}
+#| message: false
+#| warning: false
+#| fig-height: 10
+
+plot_histogram(dat_sample, hist_col = n_sample) +
+  facet_wrap(~variable, scales = "free", ncol = 2)
+```
+
+## Figure 4
+
+- n_sample_effective
+
+```{r}
+#| message: false
+#| warning: false
+#| fig-height: 10
+
+plot_histogram(dat_sample, hist_col = n_sample_effective) +
+  facet_wrap(~variable, scales = "free", ncol = 2)
+```
+:::
+
+## Standard Deviation
+
+```{r}
+
+dat_sd <- dat_sample %>%
+  mutate(
+    # rolling sd
+    sd_roll = rollapply(
+      value,
+      width = n_sample_effective,
+      align = "center", FUN = sd, fill = NA
+    ),
+    sd_roll = round(sd_roll, digits = 2)
+  )
+```
+
+::: panel-tabset
+## Figure 5
+```{r}
+#| message: false
+#| warning: false
+#| fig-height: 10
+
+plot_histogram(dat_sd, hist_col = sd_roll) +
+  facet_wrap(~variable, ncol = 2, scales = "free")
+```
+
+## Figure 6
+
+- Only use observations with n_sample_effective = 12
+
+```{r}
+#| message: false
+#| warning: false
+#| fig-height: 10
+
+dat_sd %>% 
+  filter(n_sample_effective == 12) %>% 
+  plot_histogram(hist_col = sd_roll) +
+  facet_wrap(~variable, ncol = 2, scales = "free")
+```
+:::

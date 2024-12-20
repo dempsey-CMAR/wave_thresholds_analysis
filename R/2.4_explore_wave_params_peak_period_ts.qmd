@@ -1,0 +1,294 @@
+---
+title: ""
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, dpi = 600, fig.width = 8)
+
+library(dplyr)
+library(DT)
+library(ggplot2)
+library(googlesheets4)
+library(here)
+library(htmltools)
+library(knitr)
+library(leaflet)
+library(lubridate)
+library(plotly)
+library(purrr)
+library(stringr)
+library(summaryplots)
+library(tidyr)
+library(waves)
+
+source(here("functions/helpers.R"))
+source(here("functions/subchunkify.R"))
+
+theme_set(theme_light())
+
+dt_options <- list(
+  dom = 'ft',
+  paging = FALSE,
+  searching = TRUE,
+  scrollY = "500px",
+  scrollX = "500px",
+  columnDefs = list(list(className = 'dt-center', targets = "_all"))
+)
+
+zero_crossing <- c(
+  "average_height_largest_33_percent_m",
+  "average_height_largest_10_percent_m",
+  "period_largest_33_percent_s",
+  "period_largest_10_percent_s",
+  "maximum_height_m",
+  "period_maximum_s"
+)
+
+# read in all wave data
+dat <- readRDS(here("data/2024-08-28_wave_data_no_qc.rds")) %>% 
+  filter((!variable %in% zero_crossing))
+
+dat_wide <- dat %>% 
+  pivot_wider(values_from = "value", names_from = "variable")
+
+link <- "https://docs.google.com/spreadsheets/d/1DVfJbraoWL-BW8-Aiypz8GZh1sDS6-HtYCSrnOSW07U/edit?gid=1923344665#gid=1923344665"
+gs4_deauth()
+st_locations <- read_sheet(
+  link,
+  sheet = "Area Info",
+  col_types = "cccnnc", na = c("", "NA")
+) %>% 
+  inner_join(
+    distinct(dat, county, station, deployment_id),
+    by = join_by(station, county), 
+    relationship = "many-to-many") %>% 
+  mutate(label = paste(station, deployment_id, sep = "</br>"))
+
+county_pal <- get_county_colour_palette(length(unique(dat$county)))
+
+theme_facet_plotly <- theme(
+  panel.spacing.y = unit(15, "lines"),
+  panel.spacing.x = unit(15, "lines")
+)
+
+```
+
+# Wave Parameters: Explore Peak Period
+
+`r Sys.Date()`
+
+- No preliminary QC applied
+
+# Station Locations
+
+Approximate location of stations with wave data.
+
+```{r}
+#| fig-height: 6
+
+county_map_pal <- colorFactor(
+  palette = county_pal,
+  domain = unique(st_locations$county),
+  na.color = "transparent"
+)
+
+# interactive map
+leaflet(st_locations) %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addCircleMarkers(
+    data = st_locations,
+    lng = ~longitude, lat = ~latitude, popup = ~label,
+    weight = 1,
+    color = "black",
+    fillOpacity = 0.75,
+    fillColor = ~county_map_pal(county),
+    radius = 5
+  ) %>% 
+  addScaleBar(
+    position = "bottomleft", 
+    options = scaleBarOptions(imperial = FALSE)
+  )
+
+```
+
+# Period = 25.6 seconds
+
+:::panel-tabset
+### Figure 1
+
+Significant wave height recorded when peak_period_s = 25.6
+```{r}
+#| fig-height: 10
+
+period_25 <- dat_wide %>% 
+  filter(peak_period_s == 25.6)
+  
+p <- ggplot(
+  period_25, 
+  aes(significant_height_m, fill = deployment_id,
+      text = paste0("depl_id: ", deployment_id, "\n",
+                    "height: ", significant_height_m))
+) +
+  geom_histogram(binwidth = 0.1) +
+  facet_wrap(~county, ncol = 3, scales = "free_y") +
+  theme_facet_plotly
+
+ggplotly(p, tooltip = "text")
+
+```
+
+### Table 1
+Deployments with peak_period_s = 25.6
+```{r}
+#| message: false
+
+# deployments with period = 25.6
+period_25_depls <- period_25 %>% 
+  group_by(county, waterbody, station, deployment_id) %>% 
+  arrange(county) %>% 
+  summarise(n = n()) 
+
+datatable(period_25_depls, options = dt_options, rownames = TRUE)
+```
+
+:::
+
+
+# Significant wave heights > 0.25 m 
+
+::: panel-tabset
+
+### Figure 2
+```{r}
+#| fig-height: 10
+#| warning: false
+
+period_25_large <- period_25 %>% 
+  filter(significant_height_m > 0.25) 
+
+p <- ggplot(
+  period_25_large, 
+  aes(significant_height_m, fill = deployment_id,
+      text = paste0("depl_id: ", deployment_id, "\n",
+                    "height: ", significant_height_m))
+) +
+  geom_histogram(binwidth = 0.1) +
+  scale_x_continuous(limits = c(0, 2)) +
+  facet_wrap(~county, ncol = 3, scales = "free_y") +
+  theme_facet_plotly
+
+ggplotly(p, tooltip = "text")
+```
+
+### Table 2
+Significant wave heights > 0.25 m recorded when peak_period_s = 25.6
+```{r}
+#| message: false
+
+period_25_large_depls <- period_25_large %>%  
+  group_by(county, waterbody, station, deployment_id) %>% 
+  arrange(county) %>% 
+  summarise(n = n()) 
+
+datatable(period_25_large_depls, options = dt_options, rownames = TRUE)
+```
+:::
+
+# Deployment Figures
+
+## Deployments with > 100 observations of Tp = 25.6 s
+
+::: panel-tabset
+```{r}
+#| warning: false
+#| message: false
+#| results: asis
+
+depls <- period_25_depls %>% 
+  arrange(n) %>% 
+  filter(n > 100)
+depls <- depls$deployment_id
+
+vars <- c("significant_height_m", "peak_period_s", "to_direction_degree")   
+
+for(i in seq_along(depls)) {
+
+  depl_i <- depls[i]
+
+  dat_i <- dat %>%
+    filter(deployment_id == depl_i, variable %in% vars)
+
+  cat(paste("### ", depl_i, "\n \n"))
+
+  p_i <- dat_i %>%
+    wv_plot_ts(scales = "free")
+
+  subchunkify(p_i, fig_height = 8, fig_width = 8.5)
+
+  cat("\n\n")
+}
+
+```
+:::
+
+## Deployments with > 5 observations of Hs > 0.25 m
+
+::: panel-tabset
+```{r}
+#| warning: false
+#| message: false
+#| results: asis
+
+depls <- period_25_large_depls %>% 
+  arrange(n) %>% 
+  filter(n > 5)
+depls <- depls$deployment_id
+
+for(i in seq_along(depls)) {
+
+  depl_i <- depls[i]
+
+  dat_i <- dat %>%
+    filter(deployment_id == depl_i, variable %in% vars)
+
+  cat(paste("### ", depl_i, "\n \n"))
+
+  p_i <- dat_i %>%
+    wv_plot_ts(scales = "free")
+
+  subchunkify(p_i, fig_height = 8, fig_width = 8.5)
+
+  cat("\n\n")
+}
+
+```
+:::
+
+## GY006
+
+::: panel-tabset
+```{r}
+#| warning: false
+#| message: false
+#| results: asis
+
+dat_i <- dat %>%
+  filter(deployment_id == "GY006", variable %in% vars)
+
+cat(paste("### ", depl_i, "\n \n"))
+
+p_i <- dat_i %>%
+  wv_plot_ts(scales = "free")
+
+subchunkify(p_i, fig_height = 8, fig_width = 8.5)
+
+```
+:::
+

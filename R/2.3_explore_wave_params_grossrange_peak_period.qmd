@@ -1,0 +1,360 @@
+---
+title: ""
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    embed-resources: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, dpi = 600, fig.width = 8)
+
+library(dplyr)
+library(DT)
+library(ggplot2)
+library(googlesheets4)
+library(here)
+library(htmltools)
+library(knitr)
+library(leaflet)
+library(lubridate)
+library(plotly)
+library(purrr)
+library(stringr)
+library(summaryplots)
+library(tidyr)
+library(waves)
+
+source(here("functions/helpers.R"))
+source(here("functions/subchunkify.R"))
+
+theme_set(theme_light())
+
+dt_options <- list(
+  dom = 'ft',
+  paging = FALSE,
+  searching = TRUE,
+  scrollY = "500px",
+  scrollX = "500px",
+  columnDefs = list(list(className = 'dt-center', targets = "_all"))
+)
+
+zero_crossing <- c(
+  "average_height_largest_33_percent_m",
+  "average_height_largest_10_percent_m",
+  "period_largest_33_percent_s",
+  "period_largest_10_percent_s",
+  "maximum_height_m",
+  "period_maximum_s"
+)
+
+# read in all wave data
+dat <- readRDS(here("data/2024-08-28_wave_data_prelim_qc.rds")) %>% 
+  filter((
+    !variable %in% zero_crossing),
+    deployment_id != "PC001"
+  )
+
+dat_wide <- dat %>% 
+  pivot_wider(values_from = "value", names_from = "variable")
+
+
+gs4_deauth()
+st_locations <- read_sheet(
+  "https://docs.google.com/spreadsheets/d/1DVfJbraoWL-BW8-Aiypz8GZh1sDS6-HtYCSrnOSW07U/edit?gid=1923344665#gid=1923344665",
+  sheet = "Area Info",
+  col_types = "cccnnc", na = c("", "NA")
+) %>% 
+  inner_join(distinct(dat, county, station), by = join_by(station, county))
+
+
+county_pal <- get_county_colour_palette(length(unique(dat$county)))
+
+theme_facet_plotly <- theme(
+  panel.spacing.y = unit(15, "lines"),
+  panel.spacing.x = unit(15, "lines")
+)
+
+vars <- unique(dat$variable)
+
+```
+
+# Wave Parameters: Explore Peak Period
+
+`r Sys.Date()`
+
+- Review observations where peak_period_s = 25.6 seconds
+- Review observations where peak_period_s > 18 seconds
+- Preliminary QC applied (0 values and obvious outliers removed through grossrange test).
+- Additional QC applied after additional review of the data
+  - Wave heights > 20 m
+  - Periods > 100 s
+
+# Station Locations
+
+Approximate location of stations with wave data.
+
+```{r}
+#| fig-height: 6
+
+county_map_pal <- colorFactor(
+  palette = county_pal,
+  domain = unique(st_locations$county),
+  na.color = "transparent"
+)
+
+# interactive map
+leaflet(st_locations) %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addCircleMarkers(
+    data = st_locations,
+    lng = ~longitude, lat = ~latitude, label = ~station,
+    weight = 1,
+    color = "black",
+    fillOpacity = 0.75,
+    fillColor = ~county_map_pal(county),
+    radius = 5
+  ) %>% 
+  addScaleBar(
+    position = "bottomleft", 
+    options = scaleBarOptions(imperial = FALSE)
+  )
+
+```
+
+# Period = 25.6 seconds
+
+### Table 1
+Deployments with peak_period_s = 25.6
+```{r}
+#| message: false
+
+period_25 <- dat_wide %>% 
+  filter(peak_period_s == 25.6)
+
+# deployments with period = 25.6
+period_25 %>% 
+  group_by(county, waterbody, station, deployment_id) %>% 
+  arrange(county) %>% 
+  summarise(n = n()) %>% 
+  datatable(options = dt_options, rownames = FALSE)
+```
+
+### Figure 1
+Approximate date of when peak_period = 25.6 
+```{r}
+#| fig-height: 10
+
+t <- period_25 %>% 
+  mutate(date_utc = as_date(timestamp_utc)) %>% 
+  distinct(county, waterbody, station, deployment_id, date_utc)
+
+t2 <- period_25 %>% 
+  mutate(
+    year_utc = year(timestamp_utc),
+    month_utc = month(timestamp_utc),
+  ) %>% 
+  distinct(county, waterbody, station, deployment_id, year_utc, month_utc)
+
+p <- ggplot(
+  t, 
+  aes(date_utc, fill = deployment_id,
+      text = paste0("depl_id: ", deployment_id, "\n",
+                    "date: ", as.character(date_utc))
+  )
+) +
+  geom_histogram(bins = 30) +
+  facet_wrap(~county, ncol = 3, scales = "free_y") +
+  theme_facet_plotly
+
+ggplotly(p, tooltip = "text")
+```
+
+## Figure 2
+
+Significant wave height recorded when peak_period_s = 25.6
+```{r}
+#| fig-height: 10
+
+x <- period_25 %>% 
+  filter(significant_height_m > 0.25)
+
+
+p1 <- ggplot(period_25, aes(significant_height_m)) +
+  geom_histogram(binwidth = 0.1)
+  
+p <- ggplot(
+  period_25, 
+  aes(significant_height_m, fill = deployment_id,
+      text = paste0("depl_id: ", deployment_id, "\n",
+                    "height: ", significant_height_m))
+) +
+  geom_histogram(binwidth = 0.1) +
+  facet_wrap(~county, ncol = 3, scales = "free_y") +
+  theme_facet_plotly
+
+ggplotly(p, tooltip = "text")
+
+```
+
+# Significant wave heights > 0.25 m 
+
+### Table 2
+Significant wave heights > 0.25 m recorded when peak_period_s = 25.6
+```{r}
+#| message: false
+period_25_large <- period_25 %>% 
+  filter(significant_height_m > 0.25) 
+
+period_25_large %>%  
+  group_by(county, waterbody, station, deployment_id) %>% 
+  arrange(county) %>% 
+  summarise(n = n()) %>% 
+  datatable(options = dt_options, rownames = FALSE)
+```
+
+### Figure 3
+```{r}
+#| fig-height: 10
+
+p0 <- ggplot(period_25_large, aes(significant_height_m)) +
+  geom_histogram(binwidth = 0.05)
+
+
+p <- ggplot(
+  period_25_large, 
+  aes(significant_height_m, fill = deployment_id,
+      text = paste0("depl_id: ", deployment_id, "\n",
+                    "height: ", significant_height_m))
+) +
+  geom_histogram(binwidth = 0.1) +
+  facet_wrap(~county, ncol = 3, scales = "free_y") +
+  theme_facet_plotly
+
+ggplotly(p, tooltip = "text")
+```
+
+
+# Period > 25.6 seconds
+
+Deployments with peak_period_s > 25.6
+
+### Table 3
+
+```{r}
+
+period_26 <- dat_wide %>% 
+  filter(peak_period_s > 25.6)
+
+# deployments with period = 25.6
+period_26 %>% 
+  distinct(county, waterbody, station, deployment_id) %>% 
+  arrange(county) %>% 
+  datatable(options = dt_options, rownames = FALSE)
+```
+
+### Figure 4
+Approximate date when peak_period > 25.6 
+```{r}
+#| fig-height: 10
+
+t <- period_26 %>% 
+  mutate(date_utc = as_date(timestamp_utc)) %>% 
+  distinct(county, waterbody, station, deployment_id, date_utc)
+
+p <- ggplot(
+  t, 
+  aes(date_utc, fill = deployment_id,
+      text = paste0("depl_id: ", deployment_id, "\n",
+                    "date: ", as.character(date_utc))
+  )
+) +
+  geom_histogram(bins = 30) +
+  facet_wrap(~county, ncol = 3, scales = "free_y") +
+  theme_facet_plotly
+
+ggplotly(p, tooltip = "text")
+```
+
+## Figure 5
+
+Significant wave height recorded when peak_period_s > 25.6
+```{r}
+#| fig-height: 10
+
+p <- ggplot(
+  period_26, 
+  aes(significant_height_m, fill = deployment_id,
+      text = paste0("depl_id: ", deployment_id, "\n",
+                    "height: ", significant_height_m))
+) +
+  geom_histogram(binwidth = 0.1) +
+  facet_wrap(~county, ncol = 3, scales = "free_y") +
+  theme_facet_plotly
+
+ggplotly(p, tooltip = "text")
+
+```
+
+
+# Period > 18 seconds (not including period = 25.6 s)
+
+### Table 4
+Deployments with peak_period_s > 18 & peak_period_s != 25.6
+```{r}
+
+period_18 <- dat_wide %>% 
+  filter(peak_period_s > 18 & peak_period_s != 25.6)
+
+# deployments with period = 25.6
+period_18 %>% 
+  distinct(county, waterbody, station, deployment_id) %>% 
+  arrange(county) %>% 
+  datatable(options = dt_options, rownames = FALSE)
+```
+
+### Figure 6
+Approximate date of when peak_period > 18 
+```{r}
+#| fig-height: 10
+
+t <- period_18 %>% 
+  mutate(date_utc = as_date(timestamp_utc)) %>% 
+  distinct(county, waterbody, station, deployment_id, date_utc)
+
+p <- ggplot(
+  t, 
+  aes(date_utc, fill = deployment_id,
+      text = paste0("depl_id: ", deployment_id, "\n",
+                    "date: ", as.character(date_utc))
+  )
+) +
+  geom_histogram(bins = 30) +
+  facet_wrap(~county, ncol = 3, scales = "free_y") +
+  theme_facet_plotly
+
+ggplotly(p, tooltip = "text")
+```
+
+## Figure 7
+
+Significant wave height recorded when peak_period_s > 25.6
+```{r}
+#| fig-height: 10
+
+p <- ggplot(
+  period_18, 
+  aes(significant_height_m, fill = deployment_id,
+      text = paste0("depl_id: ", deployment_id, "\n",
+                    "height: ", significant_height_m))
+) +
+  geom_histogram(binwidth = 0.1) +
+  facet_wrap(~county, ncol = 3, scales = "free_y") +
+  theme_facet_plotly
+
+ggplotly(p, tooltip = "text")
+
+```
