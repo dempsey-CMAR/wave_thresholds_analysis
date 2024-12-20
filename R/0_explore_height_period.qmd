@@ -52,13 +52,18 @@ theme_facet_plotly <- theme(
 
 # Wave Parameters: Explore height and period
 
-September 4, 2024
+`r Sys.Date()`
 
 - Preliminary analysis suggests that 0 and -0.1 are used to indicate "bad" period measurements.
 - Wave height values of 0 m are not automatically considered suspect, but if they correspond to a period of 0 or -0.1 s, then they should be suspect or fail.
+- Teledyne has recommended that we do not publish zero-up crossing parameters (`average_height_largest_10_percent_m`, `average_height_largest_33_percent_m`, `maximum_height_m`, and the corresponding period measurements) from 4 beam ADCPs.
+  - The zero-up crossing parameters rely on the use of acoustic surface tracking.
+  - The 4 beams can often "skip away" from the ADCP and provide a poor surface tracking measurement.
+  - See email from Paul Devine (October 2024)
 
+These figures show the value of all variables when the highlighted variable is less than or equal to zero. For example, in the tab `significant_height_m`, the data is filtered to observations where `significant_height_m <= 0`.
 
-
+::: panel-tabset
 ```{r}
 #| message: false
 #| warning: false
@@ -92,13 +97,10 @@ for(i in seq_along(vars)) {
   print(
     htmltools::tagList(ggplotly(p_i, tooltip = "text", height = 1400))
   )
-  
-  #ggplotly(p)
-  
-  #subchunkify(p, fig_height = 10, fig_width = 8.5)
 }
 
 ```
+:::
 
 - There is only one peak period observation of 0 s (North Aberdeen).
 - "Bad" height and period observations correspond with bad direction observation (recorded as 0).
