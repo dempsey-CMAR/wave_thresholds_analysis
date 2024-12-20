@@ -4,7 +4,12 @@
 .Ruserdata
 
 *.html
+*.xlsx
 .Rdata
 .httr-oauth
 .DS_Store
 data-compare
+
+R/archive
+data/
+output/
